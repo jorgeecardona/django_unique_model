@@ -21,8 +21,8 @@ class UniqueModel(models.Model):
 
     """
 
-    uuid = models.CharField(max_length = 36, primary_key=True)
-    uuid_timestamp = models.DateTimeField(auto_now_add = True)
+    uuid = models.CharField(max_length=36, primary_key=True)
+    uuid_timestamp = models.DateTimeField(auto_now_add=True)
 
     @classmethod
     def _create(cls, __unique__fields__ = [], *args, **kwords):
@@ -62,3 +62,6 @@ from django import forms
 
 class ReferenceField(forms.CharField):
     pass
+
+
+#class UniqueField()
