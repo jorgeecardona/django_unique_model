@@ -10,6 +10,37 @@ class EntityNotFoundException(Exception):
 class DuplicatedEntityException(Exception):
     pass
 
+class ReferenceUniqueModel(models.CharField):
+
+    description = "A reference to a unique model."
+
+    __metaclass__ = models.SubfieldBase
+
+    def __init__(self, cls, *args, **kwargs):
+        self.cls = cls
+        kwargs['max_length'] = 36
+        super(ReferenceUniqueModel, self).__init__(*args, **kwargs)
+
+    def to_python(self, value):
+        if isinstance(value , UniqueModel):
+            return value
+
+        try:
+            return self.cls._get_by(uuid=value)
+        except:
+            return None
+        
+    def get_prep_value(self, value):
+        return value.uuid if isinstance(value, UniqueModel) else None
+
+    # def get_prep_lookup(self, lookup_type, value):
+    #     if lookup_type == 'exact':
+    #         return self.get_prep_value(value)
+    #     if lookup_type == 'isnull':
+    #         return None
+    #     else:
+    #         raise TypeError('Lookup type %r not supported.' % (lookup_type))
+
 class UniqueModel(models.Model):
     """
     Unique Model
@@ -26,6 +57,7 @@ class UniqueModel(models.Model):
     """
 
     uuid = models.CharField(max_length=36)
+#    timestamp_uuid = UniqueCombined(fields=['uuid'])
     timestamp_uuid = models.DateTimeField()
 
     @classmethod
@@ -39,34 +71,35 @@ class UniqueModel(models.Model):
             now = datetime.utcnow()
 
             entity.uuid = uuid
-            for key in entity.__dict__.keys():
-                if key.startswith('timestamp_'):
-                    setattr(entity, key, now)
+            for field in entity._meta.fields:
+                if field.name.startswith('timestamp_'):
+                    setattr(entity, field.name, now)
                 
             entity.save()
             
+            field_names = entity._meta.get_all_field_names()
+            field_names = [name for name in field_names if name.startswith('timestamp_')]
+
             # Walk in all the fields.
-            for field in entity._meta.fields:
+            for name in field_names:
                 
-                # Check for fields that starts with timestamp_
-                if field.name.startswith('timestamp_'):
+                # Get keys from field name
+                keys = name.replace('timestamp_', '').split('_')
+                
+                # Get user
+                parameters = dict([(k, getattr(entity, k)) for k in keys])
+                user = cls._get_by(**parameters)
+
+                # Check unique
+                if user != entity:
+                    # There is a duplicated entity.
+                    entity.delete()
+
+                    if field.name == 'timestamp_uuid':
+                        # If uuid, then try a new uuid
+                        break
                     
-                    # Get keys from field name
-                    keys = field.name.replace('timestamp_', '').split('_')
-                    
-                    # Get user
-                    user = cls._get_by(**dict([(k, getattr(entity, k)) for k in keys]))
-
-                    # Check unique
-                    if user != entity:
-                        # There is a duplicated entity.
-                        entity.delete()
-
-                        if field.name == 'timestamp_uuid':
-                            # If uuid, then try a new uuid
-                            break
-
-                        raise DuplicatedEntityException
+                    raise DuplicatedEntityException
     
             return entity
 
@@ -81,19 +114,26 @@ class UniqueModel(models.Model):
         return cls._get_by(uuid=uuid)
 
     @classmethod
-    def _get_by(cls, **kwords):
+    def _get_by(cls, **kwargs):
         try:
-            timestamp = 'timestamp_%s' % ('_'.join(kwords.keys()))
+            timestamp = 'timestamp_%s' % ('_'.join(kwargs.keys()))
             return cls.objects.filter(
-                **kwords
+                **kwargs
                   ).order_by(timestamp)[0]
         
         except IndexError:
             raise EntityNotFoundException(
-                "Class: <%s>, %s." % (cls.__name__, ', '.join(["%s: <%s>" % (k,v) for k,v in kwords.items()]))
+                "Class: <%s>, %s." % (
+                    cls.__name__, 
+                    ', '.join(["%s: <%s>" % (k,v) for k,v in kwargs.items()])
+                    )
                 )
 
     def _update(self, **kwords):
+
+        # Check if change is useless
+        if all([getattr(self, k) == v for k,v in kwords.items()]):
+            return self
 
         # Copy parameters from self
         names = self._meta.get_all_field_names()
@@ -125,18 +165,6 @@ class UniqueModel(models.Model):
         self.delete()
         return entity
             
-
-
-#        parameters.update(timestamps)
-        
-        # Create entity.
-#        entity = self.__class__(**parameters)
-#        entity.save()
-        
-        
-            
-
-
     def __eq__(self, other):
         if isinstance(other, UniqueModel):
             return (self.uuid == other.uuid)
