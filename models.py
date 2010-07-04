@@ -16,8 +16,8 @@ class ReferenceUniqueModel(models.CharField):
 
     __metaclass__ = models.SubfieldBase
 
-    def __init__(self, cls, *args, **kwargs):
-        self.cls = cls
+    def __init__(self, class_, *args, **kwargs):
+        self._class = class_
         kwargs['max_length'] = 36
         super(ReferenceUniqueModel, self).__init__(*args, **kwargs)
 
@@ -25,8 +25,12 @@ class ReferenceUniqueModel(models.CharField):
         if isinstance(value , UniqueModel):
             return value
 
+        if isinstance(self._class, (str, unicode)):
+            base, sub = self._class.rsplit('.',1)
+            self._class = __import__(base, fromlist=[sub])
+
         try:
-            return self.cls._get_by(uuid=value)
+            return self._class._get_by(uuid=value)
         except:
             return None
         
