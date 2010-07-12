@@ -4,10 +4,26 @@ from django.db import models
 # Create your models here.
 from uuid import uuid4
 
+class UniqueField(models.DateTimeField):
+    
+    description = "Lock time to mantain uniqueness in a set of fields."
+    
+    __metaclass__ = models.SubfieldBase
+
+    def __init__(self, fields, *args, **kwargs):
+        if not isinstance(fields, list):
+            fields = [fields]
+        self.fields = fields
+        super(UniqueField, self).__init__(*args, **kwargs)    
+
+
 class EntityNotFoundException(Exception):
     pass
 
 class DuplicatedEntityException(Exception):
+    pass
+
+class UniquenessException(Exception):
     pass
 
 class ReferenceUniqueModel(models.CharField):
@@ -26,8 +42,9 @@ class ReferenceUniqueModel(models.CharField):
             return value
 
         if isinstance(self._class, (str, unicode)):
+            # If _class is a string, the module has to be loaded.
             base, sub = self._class.rsplit('.',1)
-            self._class = __import__(base, fromlist=[sub])
+            self._class = getattr(__import__(base, fromlist=[sub]), sub)
 
         try:
             return self._class._get_by(uuid=value)
@@ -61,8 +78,9 @@ class UniqueModel(models.Model):
     """
 
     uuid = models.CharField(max_length=36)
+    uniqueness_uuid = UniqueField('uuid')
 #    timestamp_uuid = UniqueCombined(fields=['uuid'])
-    timestamp_uuid = models.DateTimeField()
+#    timestamp_uuid = models.DateTimeField()
 
     @classmethod
     def _create(cls, __unique__fields__ = [], *args, **kwords):
@@ -75,37 +93,30 @@ class UniqueModel(models.Model):
             now = datetime.utcnow()
 
             entity.uuid = uuid
+
             for field in entity._meta.fields:
-                if field.name.startswith('timestamp_'):
+                if isinstance(field, UniqueField):
                     setattr(entity, field.name, now)
                 
             entity.save()
             
-            field_names = entity._meta.get_all_field_names()
-            field_names = [name for name in field_names if name.startswith('timestamp_')]
-
-            # Walk in all the fields.
-            for name in field_names:
+            for field in entity._meta.fields:
+                if not isinstance(field, UniqueField):
+                    continue
                 
-                # Get keys from field name
-                keys = name.replace('timestamp_', '').split('_')
+                # parameters
+                parameters = dict([(k, getattr(entity, k)) for k in field.fields])
+                result = cls._get_by(**parameters)
                 
-                # Get user
-                parameters = dict([(k, getattr(entity, k)) for k in keys])
-                user = cls._get_by(**parameters)
-
-                # Check unique
-                if user != entity:
-                    # There is a duplicated entity.
+                if result != entity:
                     entity.delete()
 
-                    if field.name == 'timestamp_uuid':
-                        # If uuid, then try a new uuid
+                    if field.fields == ['uuid']:
                         break
-                    
+
                     raise DuplicatedEntityException
-    
-            return entity
+
+            return entity                    
 
         raise Exception("Maximum number of tries reached.")
     
@@ -119,19 +130,24 @@ class UniqueModel(models.Model):
 
     @classmethod
     def _get_by(cls, **kwargs):
-        try:
-            timestamp = 'timestamp_%s' % ('_'.join(kwargs.keys()))
-            return cls.objects.filter(
-                **kwargs
-                  ).order_by(timestamp)[0]
-        
-        except IndexError:
-            raise EntityNotFoundException(
-                "Class: <%s>, %s." % (
-                    cls.__name__, 
-                    ', '.join(["%s: <%s>" % (k,v) for k,v in kwargs.items()])
-                    )
-                )
+        # Search for the right lock.
+        for field in cls._meta.fields:
+            if not isinstance(field, UniqueField):
+                continue
+            
+            # Check if all the fields belong to a particular lock.
+            if all([key in field.fields for key in kwargs.keys()]):
+                entity = cls.objects.filter(**kwargs).order_by(field.name)
+                if len(entity) > 0:
+                    return entity[0]
+                
+                raise EntityNotFoundException("Entity no found for class: %s with arguments %s." % (
+                        cls.__name__,
+                        ', '.join(['%s = %s' % (k,v) for k,v in kwargs.items()])
+                        ))
+
+        raise UniquenessException("Lock not found for the sets of arguments.")
+
 
     def _update(self, **kwords):
 
@@ -140,31 +156,31 @@ class UniqueModel(models.Model):
             return self
 
         # Copy parameters from self
-        names = self._meta.get_all_field_names()
-        parameters = dict([(k, getattr(self, k)) for k in names])
+        parameters = dict([(field.name, getattr(self, field.name)) for field in self._meta.fields])
         parameters.pop('id')
 
         # Change all dates, in order to preserve actual uniqueness.
         now = datetime.utcnow()
-        timestamps = dict([(k, now) for k in names if k.startswith('timestamp_')])
+        uniqueness = dict(
+            [(field.name, now) for field in self._meta.fields if isinstance(field, UniqueField)]
+            )
         
         # Change fields
         parameters.update(kwords)
-        parameters.update(timestamps)
+        parameters.update(uniqueness)
 
         entity = self.__class__(**parameters)
         entity.save()
         
-        for name in self._meta.get_all_field_names():
-            if name.startswith('timestamp_'):
-                keys = name.replace('timestamp_', '').split('_')
-                if any([k in keys for k in kwords.keys()]):
-                    confirm_entity = self.__class__._get_by(**dict([(k, parameters[k]) for k in keys]))
-                    if confirm_entity != entity:
-                        entity.delete()
-                        raise DuplicatedEntityException
-                    
-        
+        for field in self._meta.fields:
+            if not isinstance(field, UniqueField):
+                continue
+
+            if any([k in field.fields for k in kwords.keys()]):
+                confirm_entity = self._get_by(**dict([(k, parameters[k]) for k in field.fields]))
+                if confirm_entity != entity:
+                    entity.delete()
+                    raise DuplicatedEntityException        
         
         self.delete()
         return entity
@@ -176,12 +192,3 @@ class UniqueModel(models.Model):
 
     class Meta:
         abstract = True
-
-
-from django import forms
-
-class ReferenceField(forms.CharField):
-    pass
-
-
-#class UniqueField()
