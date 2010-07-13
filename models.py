@@ -78,9 +78,7 @@ class UniqueModel(models.Model):
     """
 
     uuid = models.CharField(max_length=36)
-    uniqueness_uuid = UniqueField('uuid')
-#    timestamp_uuid = UniqueCombined(fields=['uuid'])
-#    timestamp_uuid = models.DateTimeField()
+    _uniqueness_uuid = UniqueField('uuid')
 
     @classmethod
     def _create(cls, __unique__fields__ = [], *args, **kwords):
