@@ -26,6 +26,7 @@ class DuplicatedEntityException(Exception):
 class UniquenessException(Exception):
     pass
 
+
 class ReferenceUniqueModel(models.CharField):
 
     description = "A reference to a unique model."
